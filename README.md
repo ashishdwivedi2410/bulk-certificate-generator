@@ -21,8 +21,9 @@ client track progress and download the results.
 7. [API reference](#7-api-reference)
 8. [Configuration](#8-configuration)
 9. [Design decisions](#9-design-decisions)
-10. [Known limitations and next steps](#10-known-limitations-and-next-steps)
-11. [Project structure](#11-project-structure)
+10. [Deployment to AWS EC2](#10-deployment-to-aws-ec2)
+11. [Known limitations and next steps](#11-known-limitations-and-next-steps)
+12. [Project structure](#12-project-structure)
 
 ---
 
@@ -258,7 +259,7 @@ timeouts, and the client would learn nothing until the very end. The brief also 
 progress tracking, which only makes sense if the work happens after the response.
 
 *Why not Celery/RQ?* They are the right tool at larger scale (see
-[limitations](#10-known-limitations-and-next-steps)), but they add a broker (Redis),
+[limitations](#11-known-limitations-and-next-steps)), but they add a broker (Redis),
 a separate worker process and more deployment to a project whose scale does not need
 them. `BackgroundTasks` has no extra infrastructure, and the worker logic is isolated
 in `app/workers.py` (`process_job(job_id)`), so moving it to a real queue means
@@ -321,7 +322,80 @@ infrastructure. Everything goes through SQLAlchemy, so pointing `DATABASE_URL` a
 PostgreSQL requires no code changes (the PostgreSQL driver must be installed, and this
 path is not covered by the test suite, which uses SQLite).
 
-## 10. Known limitations and next steps
+## 10. Deployment to AWS EC2
+
+Pushing to `main` runs the tests; if they pass, GitHub Actions connects to the EC2 server
+over SSH, pulls the new code and restarts the app with Docker Compose.
+
+```
+git push → CI (pytest) ✔ → deploy.yml → SSH to EC2 → git pull → docker compose up --build → health check
+                                                                      └─ on failure: roll back to the previous commit
+```
+
+### One-time server setup (Ubuntu 22.04 / 24.04)
+
+1. **Launch the instance.** `t3.small` or larger, Ubuntu. Security group: port **22** (only your IP),
+   **80** and **443** (anywhere). Attach an **Elastic IP** so the address never changes.
+2. **Let the server read the repo.** On the server create a read-only *deploy key* and add it
+   in GitHub under *Repo → Settings → Deploy keys*:
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""
+   cat ~/.ssh/id_ed25519.pub        # paste this into GitHub
+   ssh -T git@github.com            # should greet you by repo name
+   ```
+3. **Prepare the server** (installs Docker, nginx, clones the repo to `/opt/bulk-certificate-generator`):
+   ```bash
+   git clone git@github.com:<you>/bulk-certificate-generator.git /tmp/bcg
+   bash /tmp/bcg/devops/scripts/setup_ec2.sh git@github.com:<you>/bulk-certificate-generator.git
+   ```
+   Log out and back in (so the `docker` group applies), then do the first start:
+   ```bash
+   cd /opt/bulk-certificate-generator && bash devops/scripts/deploy.sh
+   curl http://localhost/health      # {"status":"ok"}
+   ```
+4. **Create a deploy SSH key for GitHub Actions** (on your own machine) and authorise it on the server:
+   ```bash
+   ssh-keygen -t ed25519 -f deploy_key -N ""
+   # append deploy_key.pub to ~/.ssh/authorized_keys on the server
+   ```
+5. **Add GitHub secrets** (*Repo → Settings → Secrets and variables → Actions*):
+
+   | Secret | Value |
+   |---|---|
+   | `EC2_HOST` | the Elastic IP or domain name |
+   | `EC2_USER` | `ubuntu` |
+   | `EC2_SSH_KEY` | the full contents of the **private** key `deploy_key` |
+   | `EC2_PORT` | optional, only if SSH is not on 22 |
+
+From now on every push to `main` deploys automatically. You can also run it by hand from the
+**Actions → Deploy to EC2 → Run workflow** button. Check the result at `http://<EC2_HOST>/health`
+and `http://<EC2_HOST>/docs`.
+
+### HTTPS and a domain
+
+Point a DNS `A` record at the Elastic IP, put the domain in `server_name` in
+`devops/nginx/default.conf`, then on the server:
+
+```bash
+sudo apt-get install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain
+```
+
+### Things to know
+
+- **Data survives deploys.** The database and PDFs live in the `certificate_data` Docker volume,
+  which `docker compose up` does not touch.
+- **A deploy restarts the container**, so a job that is running at that moment is left in
+  `processing` (see limitations). Deploy when no large job is running.
+- **No database migrations.** Tables are created with `create_all`, which never alters existing
+  tables. If you change a model's columns, the live database needs a manual change or a reset
+  (`docker compose down -v` deletes all data). Alembic would be the proper fix.
+- **Rollback** is automatic if the new version fails its health check (up to 60 s), by redeploying
+  the previous commit.
+- Port `8000` is also published by `docker-compose.yml`. For a stricter setup, close it in the
+  security group (nginx on port 80 is the intended entry point).
+
+## 11. Known limitations and next steps
 
 - **A server restart mid-job leaves that job in `processing`.** `BackgroundTasks` lives in
   the web process. The worker is idempotent (re-running a job only handles still-`pending`
@@ -340,7 +414,7 @@ path is not covered by the test suite, which uses SQLite).
 - **No sending of certificates by email**, and no retry endpoint for failed rows
   (the client can resubmit just the failed rows as a new job).
 
-## 11. Project structure
+## 12. Project structure
 
 ```
 bulk-certificate-generator/
@@ -368,7 +442,15 @@ bulk-certificate-generator/
 │   ├── unit/                        # models, schemas, services, worker
 │   └── api/                         # endpoints end to end
 ├── docker/                          # Dockerfile + Dockerfile.dockerignore
-├── .github/workflows/ci.yml         # runs pytest on push / PR
+├── devops/
+│   ├── scripts/
+│   │   ├── setup_ec2.sh             # one-time server preparation
+│   │   ├── deploy.sh                # rebuild + restart + health check (runs on the server)
+│   │   └── health_check.sh          # waits for GET /health
+│   └── nginx/default.conf           # port 80 -> app
+├── .github/workflows/
+│   ├── ci.yml                       # runs pytest on push / PR
+│   └── deploy.yml                   # after CI passes on main: deploy to EC2 over SSH
 ├── docker-compose.yml
 ├── pytest.ini
 ├── requirements.txt                 # runtime dependencies

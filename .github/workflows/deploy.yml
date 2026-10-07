@@ -1,0 +1,46 @@
+name: Deploy to EC2
+
+# Runs only after the CI workflow (pytest) has PASSED on main.
+# Can also be started by hand from the Actions tab (workflow_dispatch).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deployments at the same time
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /opt/bulk-certificate-generator   # where setup_ec2.sh cloned the repo
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: live-testing
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -e
+            cd "${{ env.APP_DIR }}"
+            PREVIOUS=$(git rev-parse HEAD)
+            git fetch origin main
+            git reset --hard origin/main
+            echo "Deploying $(git rev-parse --short HEAD) (previous: ${PREVIOUS:0:7})"
+            if ! bash devops/scripts/deploy.sh; then
+              echo "::error::Deploy failed health check - rolling back to ${PREVIOUS:0:7}"
+              git reset --hard "$PREVIOUS"
+              bash devops/scripts/deploy.sh || true
+              exit 1
+            fi
