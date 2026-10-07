@@ -1,0 +1,25 @@
+# Generated certificates: keep only the folder itself
+generated/*
+!generated/.gitkeep
+
+# Environment / secrets
+.env
+
+# Databases
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.DS_Store

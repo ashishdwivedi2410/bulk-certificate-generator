@@ -1,0 +1,15 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      MAX_RECIPIENTS_PER_JOB: "5000"
+    volumes:
+      - certificate_data:/data   # SQLite database + generated PDFs survive restarts
+    restart: unless-stopped
+
+volumes:
+  certificate_data:

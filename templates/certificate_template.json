@@ -1,0 +1,13 @@
+{
+  "title": "CERTIFICATE OF COMPLETION",
+  "intro_text": "This is to certify that",
+  "completion_text": "has successfully completed",
+  "date_label": "Date",
+  "issuer_label": "Issued by",
+  "date_format": "%d %B %Y",
+  "colors": {
+    "primary": "#1F3A5F",
+    "text": "#444444",
+    "name": "#000000"
+  }
+}

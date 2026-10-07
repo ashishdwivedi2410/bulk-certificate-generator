@@ -1,0 +1,8 @@
+# Runtime dependencies (versions this project was developed and tested with)
+fastapi==0.142.2
+uvicorn==0.54.0
+SQLAlchemy==2.1.4
+pydantic==2.13.5
+email-validator==2.3.0      # needed by pydantic's EmailStr
+reportlab==4.4.10           # PDF generation
+python-dotenv==1.2.2        # reads the optional .env file
